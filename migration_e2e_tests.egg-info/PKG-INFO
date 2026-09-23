@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: migration-e2e-tests
+Version: 0.1.0
+Summary: End-to-end test suite for the monolith -> microservices migration lab. Tests the SYSTEM, not any one service - lives in its own repo on purpose.
+Requires-Python: >=3.12
+Requires-Dist: pytest>=8.2
+Requires-Dist: httpx>=0.27
+Requires-Dist: psycopg[binary]>=3.2
