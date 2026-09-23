@@ -1,0 +1,19 @@
+[project]
+name = "migration-e2e-tests"
+version = "0.1.0"
+description = "End-to-end test suite for the monolith -> microservices migration lab. Tests the SYSTEM, not any one service - lives in its own repo on purpose."
+requires-python = ">=3.12"
+dependencies = [
+    "pytest>=8.2",
+    "httpx>=0.27",
+    "psycopg[binary]>=3.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "e2e: full real stack, end-to-end",
+    "slow: takes more than a few seconds",
+    "failure: chaos/failure-injection scenario - stops/starts real lab containers",
+]
