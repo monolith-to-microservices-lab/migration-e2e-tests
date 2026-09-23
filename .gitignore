@@ -6,3 +6,13 @@ __pycache__/
 .coverage
 htmlcov/
 .env
+# Local artifacts (never versioned)
+*.egg-info/
+*.py[cod]
+test-results/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+junit*.xml
