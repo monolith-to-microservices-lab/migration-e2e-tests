@@ -1,0 +1,98 @@
+# Full E2E - manual for now (nightly later: uncomment the schedule).
+#
+#   E2E Full   every e2e test except chaos, WITH the observability stack
+#              (Prometheus, Loki, Tempo, OTel Collector, Grafana)
+#   Chaos      -m failure: real docker stop/start of Postgres, consumer,
+#              Kafka broker and Kafka Connect, with recovery assertions
+#
+# Both run in the same job so chaos happens on the lab the happy path just
+# validated. Runtime: ~20-30 min.
+name: E2E Full
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-full-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  e2e-full:
+    name: E2E Full + Chaos
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: migration-e2e-tests
+      - uses: actions/checkout@v7
+        with:
+          repository: monolith-to-microservices-lab/monolito-microservice
+          ref: main
+          path: monolito-microservice
+      - uses: actions/checkout@v7
+        with:
+          repository: monolith-to-microservices-lab/cdc-infrastructure
+          ref: main
+          path: cdc-infrastructure
+      - uses: actions/checkout@v7
+        with:
+          repository: monolith-to-microservices-lab/user-service
+          ref: main
+          path: user-service
+      - uses: actions/checkout@v7
+        with:
+          repository: monolith-to-microservices-lab/sales-service
+          ref: main
+          path: sales-service
+      - uses: actions/checkout@v7
+        with:
+          repository: monolith-to-microservices-lab/observability-infrastructure
+          ref: main
+          path: observability-infrastructure
+
+      - name: Bring the lab up (with observability)
+        env:
+          LAB_ROOT: ${{ github.workspace }}
+          WITH_OBSERVABILITY: "true"
+        run: migration-e2e-tests/scripts/ci/lab-up.sh
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: migration-e2e-tests/pyproject.toml
+
+      - name: Install suite
+        working-directory: migration-e2e-tests
+        run: pip install -e .
+
+      - name: E2E (happy path + observability)
+        working-directory: migration-e2e-tests
+        run: pytest -m "e2e and not failure" -o addopts="" -v --junitxml=junit-e2e.xml
+
+      - name: Chaos (-m failure)
+        working-directory: migration-e2e-tests
+        run: pytest -m failure -o addopts="" -v -s --junitxml=junit-chaos.xml
+
+      - name: Collect lab logs
+        if: always()
+        env:
+          LAB_ROOT: ${{ github.workspace }}
+        run: migration-e2e-tests/scripts/ci/collect-logs.sh lab-logs
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: e2e-full-report
+          path: |
+            migration-e2e-tests/junit-*.xml
+            migration-e2e-tests/test-results/
+            lab-logs/
+          retention-days: 7
+          if-no-files-found: ignore

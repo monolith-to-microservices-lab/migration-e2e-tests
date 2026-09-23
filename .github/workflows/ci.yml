@@ -1,0 +1,131 @@
+# CI - every PR to main and every push to main.
+#
+#   Lint, Type Check  the suite's own code (ruff, mypy, shellcheck)
+#   E2E Smoke         the REAL lab on the runner, no mocks:
+#                     monolith + legacy Postgres (WAL) -> Debezium -> Kafka ->
+#                     user/sales CDC consumers -> destination Postgres,
+#                     checked through the real HTTP APIs and databases.
+#                     Selection: -m smoke (users, sales, linked user+sale).
+#
+# The full suite (observability + chaos) is e2e-full.yml (manual; nightly later).
+# Lab repositories are checked out from their main branch.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - name: ruff check
+        run: ruff check --output-format=github .
+      - name: ruff format --check
+        run: ruff format --check .
+      - name: shellcheck
+        run: docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0 --severity=warning scripts/ci/*.sh
+
+  type-check:
+    name: Type Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - run: mypy
+
+  e2e-smoke:
+    name: E2E Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: migration-e2e-tests
+      - uses: actions/checkout@v7
+        with:
+          repository: monolith-to-microservices-lab/monolito-microservice
+          ref: main
+          path: monolito-microservice
+      - uses: actions/checkout@v7
+        with:
+          repository: monolith-to-microservices-lab/cdc-infrastructure
+          ref: main
+          path: cdc-infrastructure
+      - uses: actions/checkout@v7
+        with:
+          repository: monolith-to-microservices-lab/user-service
+          ref: main
+          path: user-service
+      - uses: actions/checkout@v7
+        with:
+          repository: monolith-to-microservices-lab/sales-service
+          ref: main
+          path: sales-service
+
+      - name: Tooling used by the lab scripts
+        run: |
+          command -v jq envsubst curl python3
+          docker compose version
+
+      - name: Bring the lab up
+        env:
+          LAB_ROOT: ${{ github.workspace }}
+        run: migration-e2e-tests/scripts/ci/lab-up.sh
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: migration-e2e-tests/pyproject.toml
+
+      - name: pytest -m smoke
+        working-directory: migration-e2e-tests
+        run: |
+          pip install -e .
+          pytest -m smoke -o addopts="" -v --junitxml=junit-e2e-smoke.xml
+
+      - name: Collect lab logs
+        if: failure()
+        env:
+          LAB_ROOT: ${{ github.workspace }}
+        run: migration-e2e-tests/scripts/ci/collect-logs.sh lab-logs
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: e2e-smoke-report
+          path: |
+            migration-e2e-tests/junit-e2e-smoke.xml
+            migration-e2e-tests/test-results/
+            lab-logs/
+          retention-days: 7
+          if-no-files-found: ignore

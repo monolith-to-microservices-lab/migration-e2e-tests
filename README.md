@@ -74,3 +74,20 @@ the only pattern used here.
 
 `e2e` (everything here), `slow`, `failure` (implies real container
 stop/start - see above).
+
+## CI
+
+| Workflow | Trigger | Job | What runs |
+|---|---|---|---|
+| `ci.yml` | every PR / push to `main` | **Lint**, **Type Check** | ruff, mypy, ShellCheck (`scripts/ci`) |
+| | | **E2E Smoke** | checks out the lab repos (`main`), brings the **real** lab up with `scripts/ci/lab-up.sh` (monolith + legacy Postgres + Kafka + Debezium + both services + both consumers + destination DBs) and runs `pytest -m smoke` (users, sales, linked user+sale) |
+| `e2e-full.yml` | manual (nightly later) | **E2E Full + Chaos** | same lab **plus** the observability stack; `-m "e2e and not failure"` then `-m failure` (real `docker stop/start`) |
+| `security.yml` | every PR / push, weekly | **Security** | Gitleaks, pip-audit |
+
+On failure, container logs, connector status and replication-slot state are
+uploaded as an artifact (`scripts/ci/collect-logs.sh`), together with the
+evidence in `test-results/`.
+
+`scripts/ci/lab-up.sh` is for CI runners and fresh machines: it builds and starts
+the same compose projects as your local lab, so do not run it where the lab holds
+data you care about.
