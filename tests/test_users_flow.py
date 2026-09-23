@@ -3,6 +3,7 @@
 MONOLITH -> LEGACY POSTGRES -> WAL -> DEBEZIUM -> KAFKA -> user-service-cdc
 -> USER POSTGRES. No mocks anywhere in this chain.
 """
+
 from __future__ import annotations
 
 import time
@@ -22,6 +23,7 @@ CONSUMER_CONTAINER = "user-service-user-service-cdc-1"
 
 
 @pytest.mark.e2e
+@pytest.mark.smoke
 def test_user_create_update_delete_propagates_end_to_end(evidence, run_id):
     unique_name = f"{run_id}_user_create"
 
@@ -43,7 +45,9 @@ def test_user_create_update_delete_propagates_end_to_end(evidence, run_id):
     t1 = time.time()
     legacy_execute("UPDATE users SET name = %s WHERE id = %s", (updated_name, user_id))
 
-    row = poll_for_row(USER_DSN, "SELECT id, name FROM users WHERE id = %s AND name = %s", (user_id, updated_name))
+    row = poll_for_row(
+        USER_DSN, "SELECT id, name FROM users WHERE id = %s AND name = %s", (user_id, updated_name)
+    )
     assert row is not None
     ev = evidence.from_consumer_log(CONSUMER_CONTAINER, "users", "UPDATE", "user", user_id, "u")
     ev.end_to_end_latency_s = time.time() - t1

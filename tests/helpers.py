@@ -3,15 +3,17 @@ to the real lab endpoints, a run-id generator, evidence collection, and the
 JSON+Markdown report writer. This suite exercises the REAL stack - no mocks,
 no fakes, for any of monolith/Postgres/Debezium/Kafka/consumer/destination DB.
 """
+
 from __future__ import annotations
 
 import json
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import psycopg
 
@@ -28,14 +30,19 @@ TEMPO_URL = "http://localhost:3200"
 
 
 def new_run_id() -> str:
-    return f"e2e_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}"
+    return f"e2e_{datetime.now(UTC):%Y%m%d_%H%M%S}"
 
 
 class TimeoutExceeded(AssertionError):
     pass
 
 
-def poll_until(predicate: Callable[[], bool], timeout: float = 15.0, interval: float = 0.2, desc: str = "condition") -> None:
+def poll_until(
+    predicate: Callable[[], bool],
+    timeout: float = 15.0,
+    interval: float = 0.2,
+    desc: str = "condition",
+) -> None:
     """Poll `predicate` until it returns truthy, or raise. Never a fixed
     sleep - returns as soon as the condition is met.
     """
@@ -65,11 +72,18 @@ def poll_for_row(dsn: str, query: str, params: tuple, timeout: float = 15.0, int
                 return True
         return False
 
-    poll_until(_check, timeout=timeout, interval=interval, desc=f"row for {query % params if '%s' not in query else query}")
+    poll_until(
+        _check,
+        timeout=timeout,
+        interval=interval,
+        desc=f"row for {query % params if '%s' not in query else query}",
+    )
     return holder["row"]
 
 
-def poll_for_absence(dsn: str, query: str, params: tuple, timeout: float = 15.0, interval: float = 0.3) -> None:
+def poll_for_absence(
+    dsn: str, query: str, params: tuple, timeout: float = 15.0, interval: float = 0.3
+) -> None:
     def _check() -> bool:
         with psycopg.connect(dsn) as conn, conn.cursor() as cur:
             cur.execute(query, params)
@@ -152,7 +166,14 @@ class EvidenceCollector:
         self.rows.append(row)
 
     def from_consumer_log(
-        self, container: str, flow: str, operation: str, entity: str, entity_id: int, op_code: str, timeout: float = 15.0
+        self,
+        container: str,
+        flow: str,
+        operation: str,
+        entity: str,
+        entity_id: int,
+        op_code: str,
+        timeout: float = 15.0,
     ) -> EvidenceRow:
         """Extract topic/partition/offset from the consumer's own
         structured JSON log line (`cdc.applied`) for this entity/op -
@@ -180,12 +201,24 @@ class EvidenceCollector:
                     return True
             return False
 
-        poll_until(_check, timeout=timeout, interval=0.3, desc=f"consumer log for {entity} {entity_id} op={op_code}")
+        poll_until(
+            _check,
+            timeout=timeout,
+            interval=0.3,
+            desc=f"consumer log for {entity} {entity_id} op={op_code}",
+        )
         payload = holder["payload"]
         row = EvidenceRow(
-            run_id=self.run_id, flow=flow, operation=operation, entity=entity, entity_id=entity_id,
-            topic=payload.get("topic", ""), partition=payload.get("partition"), offset=payload.get("offset"),
-            consumer_applied_at=holder["timestamp"], result="OK",
+            run_id=self.run_id,
+            flow=flow,
+            operation=operation,
+            entity=entity,
+            entity_id=entity_id,
+            topic=payload.get("topic", ""),
+            partition=payload.get("partition"),
+            offset=payload.get("offset"),
+            consumer_applied_at=holder["timestamp"],
+            result="OK",
         )
         self.add(row)
         return row
@@ -196,7 +229,9 @@ class EvidenceCollector:
         md_path = RESULTS_DIR / f"{self.run_id}.md"
 
         json_path.write_text(
-            json.dumps({"run_id": self.run_id, "rows": [vars(r) for r in self.rows]}, indent=2, default=str),
+            json.dumps(
+                {"run_id": self.run_id, "rows": [vars(r) for r in self.rows]}, indent=2, default=str
+            ),
             encoding="utf-8",
         )
 

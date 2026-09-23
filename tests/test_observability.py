@@ -4,6 +4,7 @@ trace for the parts where tracing genuinely applies. Does NOT require (or
 fabricate) a single trace spanning the WAL - see observability-infrastructure
 README for why that's not possible.
 """
+
 from __future__ import annotations
 
 import time
@@ -11,7 +12,15 @@ import time
 import httpx
 import pytest
 
-from tests.helpers import MONOLITH_URL, PROMETHEUS_URL, LOKI_URL, TEMPO_URL, USER_DSN, poll_for_row, poll_until
+from tests.helpers import (
+    LOKI_URL,
+    MONOLITH_URL,
+    PROMETHEUS_URL,
+    TEMPO_URL,
+    USER_DSN,
+    poll_for_row,
+    poll_until,
+)
 
 
 def _prom_query(expr: str) -> list[dict]:
@@ -39,7 +48,12 @@ def test_prometheus_processed_counter_increases_after_real_create(run_id):
     def _increased() -> bool:
         return _prom_scalar('sum(cdc_events_processed_total{operation="c"})') > before
 
-    poll_until(_increased, timeout=20, interval=1.0, desc="cdc_events_processed_total{operation=c} to increase")
+    poll_until(
+        _increased,
+        timeout=20,
+        interval=1.0,
+        desc="cdc_events_processed_total{operation=c} to increase",
+    )
 
 
 @pytest.mark.e2e
@@ -77,7 +91,9 @@ def test_tempo_has_a_trace_for_the_monolith_request():
 
     def _has_trace() -> bool:
         r = httpx.get(
-            f"{TEMPO_URL}/api/search", params={"tags": "service.name=monolith-backend", "limit": "1"}, timeout=5
+            f"{TEMPO_URL}/api/search",
+            params={"tags": "service.name=monolith-backend", "limit": "1"},
+            timeout=5,
         )
         r.raise_for_status()
         return len(r.json().get("traces", [])) > 0

@@ -8,11 +8,13 @@ These are slow (each involves real container start/stop + real recovery
 polling) and have real side effects on shared lab infrastructure - run them
 deliberately: `pytest -m failure`.
 """
+
 from __future__ import annotations
 
 import time
 
 import httpx
+import psycopg
 import pytest
 
 from tests.helpers import (
@@ -28,8 +30,6 @@ from tests.helpers import (
     wait_container_healthy,
 )
 
-import psycopg
-
 pytestmark = [pytest.mark.e2e, pytest.mark.failure, pytest.mark.slow]
 
 USER_POSTGRES_CONTAINER = "user-service-user-postgres-1"
@@ -44,7 +44,10 @@ def _consumer_group_lag(consumergroup: str) -> int:
     r.raise_for_status()
     total = 0
     for line in r.text.splitlines():
-        if line.startswith("kafka_consumergroup_lag{") and f'consumergroup="{consumergroup}"' in line:
+        if (
+            line.startswith("kafka_consumergroup_lag{")
+            and f'consumergroup="{consumergroup}"' in line
+        ):
             total += int(float(line.rsplit(" ", 1)[1]))
     return total
 
@@ -68,13 +71,23 @@ def test_destination_database_down_then_recovers(run_id):
         def _lag_rose() -> bool:
             return _consumer_group_lag("user-service-cdc") > lag_before
 
-        poll_until(_lag_rose, timeout=20, interval=1.0, desc="consumer lag to rise while destination DB is down")
+        poll_until(
+            _lag_rose,
+            timeout=20,
+            interval=1.0,
+            desc="consumer lag to rise while destination DB is down",
+        )
 
         def _saw_apply_error() -> bool:
             log = container_log_tail(USER_CDC_CONTAINER, lines=100)
             return "cdc.apply_failed" in log or "connect" in log.lower()
 
-        poll_until(_saw_apply_error, timeout=15, interval=1.0, desc="an apply/connection error in consumer logs")
+        poll_until(
+            _saw_apply_error,
+            timeout=15,
+            interval=1.0,
+            desc="an apply/connection error in consumer logs",
+        )
     finally:
         docker_start(USER_POSTGRES_CONTAINER)
         wait_container_healthy(USER_POSTGRES_CONTAINER, timeout=60)
@@ -86,7 +99,9 @@ def test_destination_database_down_then_recovers(run_id):
     def _lag_returned_to_zero() -> bool:
         return _consumer_group_lag("user-service-cdc") <= lag_before
 
-    poll_until(_lag_returned_to_zero, timeout=30, interval=1.0, desc="consumer lag to return to baseline")
+    poll_until(
+        _lag_returned_to_zero, timeout=30, interval=1.0, desc="consumer lag to return to baseline"
+    )
 
 
 def test_consumer_down_then_recovers(run_id):
@@ -108,7 +123,12 @@ def test_consumer_down_then_recovers(run_id):
         def _lag_grew_by_three() -> bool:
             return _consumer_group_lag("user-service-cdc") >= lag_before + 3
 
-        poll_until(_lag_grew_by_three, timeout=20, interval=1.0, desc="lag to grow by 3 while consumer is down")
+        poll_until(
+            _lag_grew_by_three,
+            timeout=20,
+            interval=1.0,
+            desc="lag to grow by 3 while consumer is down",
+        )
 
         with psycopg.connect(USER_DSN) as conn, conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM users WHERE id = ANY(%s)", (user_ids,))
@@ -128,7 +148,9 @@ def test_consumer_down_then_recovers(run_id):
     def _lag_returned_to_zero() -> bool:
         return _consumer_group_lag("user-service-cdc") <= lag_before
 
-    poll_until(_lag_returned_to_zero, timeout=60, interval=1.0, desc="consumer lag to return to baseline")
+    poll_until(
+        _lag_returned_to_zero, timeout=60, interval=1.0, desc="consumer lag to return to baseline"
+    )
 
 
 def test_kafka_broker_down_then_recovers(run_id):
@@ -149,8 +171,13 @@ def test_kafka_broker_down_then_recovers(run_id):
         time.sleep(3)  # let Debezium/the consumers observe the broker is gone
         connect_log = container_log_tail(CONNECT_CONTAINER, lines=50)
         consumer_log = container_log_tail(USER_CDC_CONTAINER, lines=50)
-        print(f"\n--- Observed Kafka Connect log tail during broker outage ---\n{connect_log[-1000:]}")
-        print(f"\n--- Observed user-service-cdc log tail during broker outage ---\n{consumer_log[-1000:]}")
+        print(
+            f"\n--- Observed Kafka Connect log tail during broker outage ---\n{connect_log[-1000:]}"
+        )
+        print(
+            "\n--- Observed user-service-cdc log tail during broker outage ---\n"
+            f"{consumer_log[-1000:]}"
+        )
     finally:
         docker_start(KAFKA_CONTAINER)
         wait_container_healthy(KAFKA_CONTAINER, timeout=90)
@@ -187,7 +214,10 @@ def test_kafka_connect_down_then_recovers(run_id):
         time.sleep(2)
 
         lag_during_outage = _wal_lag_bytes()
-        print(f"\nWAL lag during Kafka Connect outage: {lag_during_outage} bytes (baseline was {lag_before_outage})")
+        print(
+            f"\nWAL lag during Kafka Connect outage: {lag_during_outage} bytes "
+            f"(baseline was {lag_before_outage})"
+        )
         assert lag_during_outage >= lag_before_outage  # WAL is accumulating, not being lost
     finally:
         docker_start(CONNECT_CONTAINER)
@@ -199,9 +229,13 @@ def test_kafka_connect_down_then_recovers(run_id):
 
     def _slot_active_again() -> bool:
         with psycopg.connect(LEGACY_DSN) as conn, conn.cursor() as cur:
-            cur.execute("SELECT active FROM pg_replication_slots WHERE slot_name = 'legacy_cdc_slot'")
+            cur.execute(
+                "SELECT active FROM pg_replication_slots WHERE slot_name = 'legacy_cdc_slot'"
+            )
             row = cur.fetchone()
             return bool(row and row[0])
 
-    poll_until(_slot_active_again, timeout=30, interval=1.0, desc="legacy_cdc_slot to become active again")
+    poll_until(
+        _slot_active_again, timeout=30, interval=1.0, desc="legacy_cdc_slot to become active again"
+    )
     legacy_execute("SELECT 1")  # sanity: legacy DB itself is fine throughout
