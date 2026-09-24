@@ -7,6 +7,8 @@ no fakes, for any of monolith/Postgres/Debezium/Kafka/consumer/destination DB.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import time
 from collections.abc import Callable
@@ -15,18 +17,80 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 import psycopg
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RESULTS_DIR = REPO_ROOT / "test-results"
 
+# The CLIENT entry point is the API Gateway (api-gateway repo): every test
+# that acts as a client goes through it, exactly like the frontend. By
+# default Kong routes everything to the monolith, so the CDC assertions are
+# unchanged. MONOLITH_URL stays for checks OF the monolith itself (its own
+# /health and traces). E2E_API_URL=http://localhost:8000 runs the suite
+# without a gateway.
+API_URL = os.environ.get("E2E_API_URL", "http://localhost:8088")
+GATEWAY_ADMIN_URL = os.environ.get("E2E_GATEWAY_ADMIN_URL", "http://127.0.0.1:8089")
+GATEWAY_STATUS_URL = os.environ.get("E2E_GATEWAY_STATUS_URL", "http://127.0.0.1:8090")
+GATEWAY_CONTAINER = "api-gateway-api-gateway-1"
 MONOLITH_URL = "http://localhost:8000"
+USER_SERVICE_URL = "http://localhost:8001"
 LEGACY_DSN = "postgresql://postgres:postgres@localhost:5432/monolith"
 USER_DSN = "postgresql://user_service:user_service@localhost:5433/user_service"
 SALES_DSN = "postgresql://sales:sales@localhost:5434/sales"
 PROMETHEUS_URL = "http://localhost:9090"
 LOKI_URL = "http://localhost:3100"
 TEMPO_URL = "http://localhost:3200"
+GATEWAY_REPO = Path(os.environ.get("E2E_GATEWAY_REPO", str(REPO_ROOT.parent / "api-gateway")))
+DEFAULT_ROUTING = {
+    "users-read": "monolith",
+    "users-write": "monolith",
+    "sales-read": "monolith",
+    "sales-write": "monolith",
+}
+
+
+def api_post(path: str, payload: dict) -> httpx.Response:
+    """POST as a client (through the gateway). While the monolith is the
+    source of truth, every write MUST be served by it - fail loudly if the
+    gateway routed it anywhere else (it would silently break CDC tests)."""
+    resp = httpx.post(f"{API_URL}{path}", json=payload, timeout=10)
+    upstream = resp.headers.get("X-Upstream-Service")
+    if upstream is not None and upstream != "monolith":
+        raise AssertionError(
+            f"POST {path} was served by {upstream!r}, not the monolith "
+            "- gateway not on its default routing?"
+        )
+    return resp
+
+
+def gateway_routing() -> dict[str, str]:
+    """Route -> upstream as Kong is routing RIGHT NOW (Admin API)."""
+    services = {
+        s["id"]: s["name"]
+        for s in httpx.get(f"{GATEWAY_ADMIN_URL}/services", timeout=5).json()["data"]
+    }
+    return {
+        r["name"]: services[r["service"]["id"]]
+        for r in httpx.get(f"{GATEWAY_ADMIN_URL}/routes", timeout=5).json()["data"]
+        if r.get("service")
+    }
+
+
+def gateway_script(name: str, *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+    """Run one of the api-gateway operator scripts - the same command an
+    operator runs (pwsh on Linux CI, Windows PowerShell locally)."""
+    exe = shutil.which("pwsh") or shutil.which("powershell")
+    if exe is None:
+        raise RuntimeError("PowerShell (pwsh/powershell) is required to drive the gateway scripts")
+    cmd = [exe, "-NoProfile", "-NonInteractive"]
+    if os.name == "nt":
+        cmd += ["-ExecutionPolicy", "Bypass"]
+    cmd += ["-File", str(GATEWAY_REPO / "scripts" / f"{name}.ps1"), *args]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=GATEWAY_REPO)
+    if r.returncode != 0:
+        raise RuntimeError(f"{name}.ps1 failed ({r.returncode}):\n{r.stdout}\n{r.stderr}")
+    return r
 
 
 def new_run_id() -> str:
@@ -158,12 +222,44 @@ class EvidenceRow:
 
 
 @dataclass
+class GatewayEvidenceRow:
+    step: str
+    method: str
+    path: str
+    gateway: str
+    destination: str
+    status: int
+    latency_ms: float
+    request_id: str
+
+
+@dataclass
 class EvidenceCollector:
     run_id: str
     rows: list[EvidenceRow] = field(default_factory=list)
+    gateway_rows: list[GatewayEvidenceRow] = field(default_factory=list)
 
     def add(self, row: EvidenceRow) -> None:
         self.rows.append(row)
+
+    def gateway(self, step: str, resp: httpx.Response) -> GatewayEvidenceRow:
+        """Record one client request through Kong: who served it and how."""
+        row = GatewayEvidenceRow(
+            step=step,
+            method=resp.request.method,
+            path=resp.request.url.path,
+            gateway="Kong"
+            if "X-Kong-Proxy-Latency" in resp.headers or "X-Request-ID" in resp.headers
+            else "-",
+            destination=resp.headers.get(
+                "X-Upstream-Service", f"(gateway answered: {resp.status_code})"
+            ),
+            status=resp.status_code,
+            latency_ms=round(resp.elapsed.total_seconds() * 1000, 1),
+            request_id=resp.headers.get("X-Request-ID", ""),
+        )
+        self.gateway_rows.append(row)
+        return row
 
     def from_consumer_log(
         self,
@@ -230,7 +326,13 @@ class EvidenceCollector:
 
         json_path.write_text(
             json.dumps(
-                {"run_id": self.run_id, "rows": [vars(r) for r in self.rows]}, indent=2, default=str
+                {
+                    "run_id": self.run_id,
+                    "rows": [vars(r) for r in self.rows],
+                    "gateway": [vars(r) for r in self.gateway_rows],
+                },
+                indent=2,
+                default=str,
             ),
             encoding="utf-8",
         )
@@ -253,6 +355,19 @@ class EvidenceCollector:
                 lines.append(f"- destination: {r.result}")
                 if r.detail:
                     lines.append(f"- detail: {r.detail}")
+            lines.append("")
+        if self.gateway_rows:
+            lines += [
+                "## gateway (client -> Kong -> destination)",
+                "",
+                "| STEP | METHOD | PATH | GATEWAY | DESTINATION | STATUS | LATENCY | REQUEST_ID |",
+                "|---|---|---|---|---|---|---|---|",
+            ]
+            for g in self.gateway_rows:
+                lines.append(
+                    f"| {g.step} | {g.method} | {g.path} | {g.gateway} | {g.destination} "
+                    f"| {g.status} | {g.latency_ms} ms | {g.request_id} |"
+                )
             lines.append("")
         md_path.write_text("\n".join(lines), encoding="utf-8")
         return json_path, md_path

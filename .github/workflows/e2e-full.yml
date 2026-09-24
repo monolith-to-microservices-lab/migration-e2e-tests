@@ -52,6 +52,11 @@ jobs:
           path: sales-service
       - uses: actions/checkout@v7
         with:
+          repository: monolith-to-microservices-lab/api-gateway
+          ref: main
+          path: api-gateway
+      - uses: actions/checkout@v7
+        with:
           repository: monolith-to-microservices-lab/observability-infrastructure
           ref: main
           path: observability-infrastructure

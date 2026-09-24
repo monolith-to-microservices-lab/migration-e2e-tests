@@ -18,6 +18,7 @@ from tests.helpers import (
     PROMETHEUS_URL,
     TEMPO_URL,
     USER_DSN,
+    api_post,
     poll_for_row,
     poll_until,
 )
@@ -40,7 +41,7 @@ def _prom_scalar(expr: str) -> float:
 def test_prometheus_processed_counter_increases_after_real_create(run_id):
     before = _prom_scalar('sum(cdc_events_processed_total{operation="c"})')
 
-    resp = httpx.post(f"{MONOLITH_URL}/users", json={"name": f"{run_id}_obs_prom"}, timeout=10)
+    resp = api_post("/users", {"name": f"{run_id}_obs_prom"})
     assert resp.status_code == 201
     user_id = resp.json()["id"]
     poll_for_row(USER_DSN, "SELECT id FROM users WHERE id = %s", (user_id,))
@@ -59,7 +60,7 @@ def test_prometheus_processed_counter_increases_after_real_create(run_id):
 @pytest.mark.e2e
 def test_loki_has_log_lines_for_the_created_entity(run_id):
     unique_name = f"{run_id}_obs_loki"
-    resp = httpx.post(f"{MONOLITH_URL}/users", json={"name": unique_name}, timeout=10)
+    resp = api_post("/users", {"name": unique_name})
     assert resp.status_code == 201
     user_id = resp.json()["id"]
     poll_for_row(USER_DSN, "SELECT id FROM users WHERE id = %s", (user_id,))

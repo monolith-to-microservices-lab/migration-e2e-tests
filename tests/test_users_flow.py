@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import time
 
-import httpx
 import pytest
 
 from tests.helpers import (
-    MONOLITH_URL,
     USER_DSN,
+    api_post,
     legacy_execute,
     poll_for_absence,
     poll_for_row,
@@ -29,7 +28,7 @@ def test_user_create_update_delete_propagates_end_to_end(evidence, run_id):
 
     # --- CREATE via the real monolith API -----------------------------------
     t0 = time.time()
-    resp = httpx.post(f"{MONOLITH_URL}/users", json={"name": unique_name}, timeout=10)
+    resp = api_post("/users", {"name": unique_name})
     assert resp.status_code == 201, resp.text
     user_id = resp.json()["id"]
 

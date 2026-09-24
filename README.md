@@ -9,9 +9,40 @@ No mocks anywhere in this repo. Every test hits the real running lab.
 
 ## Prerequisites
 
-All 5 lab repos already running (`docker compose up -d` in each):
+All lab repos already running (`docker compose up -d` in each):
 `monolito-microservice`, `user-service`, `sales-service`, `cdc-infrastructure`,
-`observability-infrastructure`.
+`api-gateway`, `observability-infrastructure`.
+
+## Entry point: the API Gateway
+
+The suite acts as a **client**, so it goes through the gateway
+(`api-gateway`, Kong on `http://localhost:8088`), exactly like the frontend:
+
+```text
+TEST -> KONG -> MONOLITH / MICROSERVICE -> DB / CDC
+```
+
+- Every client write (`POST /users`, `POST /sales`) goes through Kong, and
+  `api_post()` **fails the test if it was not served by the monolith**. While
+  the monolith is the source of truth, a write elsewhere would silently break
+  every CDC assertion.
+- `MONOLITH_URL` is only used for checks *of* the monolith itself (its
+  `/health` and traces).
+- `E2E_API_URL=http://localhost:8000` runs the suite without a gateway.
+- `tests/test_gateway.py` drives route switches with the **operator scripts**
+  of the sibling `api-gateway` checkout (`pwsh` on CI, Windows PowerShell
+  locally; override with `E2E_GATEWAY_REPO`). It expects the gateway on
+  `mode-1-all-monolith` and always returns it there.
+
+| Scenario | Marker | What is proven |
+|---|---|---|
+| E2E 1: default | `smoke gateway` | every route → monolith; CREATE USER + CREATE SALE through Kong reach both destination DBs via CDC; the client's `X-Request-ID` is the one the monolith logged |
+| E2E 2: read switch | `smoke gateway` | `GET /users/{id}` moves to user-service with the **same URL** and an **identical body**; 404 contract kept; writes stay on the monolith |
+| E2E 3: rollback | `smoke gateway` | back to the monolith, gateway healthy, same URL, the monolith's log has the request id |
+| E2E 4: upstream down | `gateway failure` | user-service stopped → controlled 502/503/504 (no fake success, no fallback), counted in `kong_http_requests_total` and Prometheus, logged with `upstream`; recovery after restart (~30-60 s: a stopped container leaves Docker DNS and Kong's balancer re-queries a failed name every 30 s) |
+
+The gateway table in `test-results/<run_id>.md` records REQUEST / METHOD /
+PATH / GATEWAY / DESTINATION / STATUS / LATENCY / REQUEST_ID for each step.
 
 ## Setup
 
@@ -72,7 +103,8 @@ the only pattern used here.
 
 ## Markers
 
-`e2e` (everything here), `slow`, `failure` (implies real container
+`e2e` (everything here), `smoke`, `gateway` (traffic through Kong incl.
+route switch/rollback), `slow`, `failure` (implies real container
 stop/start - see above).
 
 ## CI
@@ -80,7 +112,7 @@ stop/start - see above).
 | Workflow | Trigger | Job | What runs |
 |---|---|---|---|
 | `ci.yml` | every PR / push to `main` | **Lint**, **Type Check** | ruff, mypy, ShellCheck (`scripts/ci`) |
-| | | **E2E Smoke** | checks out the lab repos (`main`), brings the **real** lab up with `scripts/ci/lab-up.sh` (monolith + legacy Postgres + Kafka + Debezium + both services + both consumers + destination DBs) and runs `pytest -m smoke` (users, sales, linked user+sale) |
+| | | **E2E Smoke** | checks out the lab repos (`main`), brings the **real** lab up with `scripts/ci/lab-up.sh` (monolith + legacy Postgres + Kafka + Debezium + both services + both consumers + destination DBs + **api-gateway**) and runs `pytest -m smoke` through the gateway (users, sales, linked user+sale, gateway default routing, read switch + rollback) |
 | `e2e-full.yml` | manual (nightly later) | **E2E Full + Chaos** | same lab **plus** the observability stack; `-m "e2e and not failure"` then `-m failure` (real `docker stop/start`) |
 | `security.yml` | every PR / push, weekly | **Security** | Gitleaks, pip-audit |
 

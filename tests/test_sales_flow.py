@@ -6,12 +6,11 @@ from __future__ import annotations
 
 import time
 
-import httpx
 import pytest
 
 from tests.helpers import (
-    MONOLITH_URL,
     SALES_DSN,
+    api_post,
     legacy_execute,
     poll_for_absence,
     poll_for_row,
@@ -26,11 +25,7 @@ def test_sale_create_update_delete_propagates_end_to_end(evidence, run_id):
     item_name = f"{run_id}_sale_create"
 
     t0 = time.time()
-    resp = httpx.post(
-        f"{MONOLITH_URL}/sales",
-        json={"user_id": 1, "item_name": item_name, "quantity": 3},
-        timeout=10,
-    )
+    resp = api_post("/sales", {"user_id": 1, "item_name": item_name, "quantity": 3})
     assert resp.status_code == 201, resp.text
     sale_id = resp.json()["id"]
 

@@ -19,8 +19,8 @@ import pytest
 
 from tests.helpers import (
     LEGACY_DSN,
-    MONOLITH_URL,
     USER_DSN,
+    api_post,
     container_log_tail,
     docker_start,
     docker_stop,
@@ -62,7 +62,7 @@ def test_destination_database_down_then_recovers(run_id):
 
     docker_stop(USER_POSTGRES_CONTAINER)
     try:
-        resp = httpx.post(f"{MONOLITH_URL}/users", json={"name": unique_name}, timeout=10)
+        resp = api_post("/users", {"name": unique_name})
         assert resp.status_code == 201, resp.text
         user_id = resp.json()["id"]
 
@@ -116,7 +116,7 @@ def test_consumer_down_then_recovers(run_id):
     docker_stop(USER_CDC_CONTAINER)
     try:
         for name in names:
-            resp = httpx.post(f"{MONOLITH_URL}/users", json={"name": name}, timeout=10)
+            resp = api_post("/users", {"name": name})
             assert resp.status_code == 201, resp.text
             user_ids.append(resp.json()["id"])
 
@@ -165,7 +165,7 @@ def test_kafka_broker_down_then_recovers(run_id):
     try:
         # The legacy write itself still succeeds (Postgres doesn't need Kafka) -
         # it just can't be streamed out while the broker is down.
-        resp = httpx.post(f"{MONOLITH_URL}/users", json={"name": unique_name}, timeout=10)
+        resp = api_post("/users", {"name": unique_name})
         assert resp.status_code == 201, resp.text
         user_id = resp.json()["id"]
         time.sleep(3)  # let Debezium/the consumers observe the broker is gone
@@ -208,7 +208,7 @@ def test_kafka_connect_down_then_recovers(run_id):
 
     docker_stop(CONNECT_CONTAINER)
     try:
-        resp = httpx.post(f"{MONOLITH_URL}/users", json={"name": unique_name}, timeout=10)
+        resp = api_post("/users", {"name": unique_name})
         assert resp.status_code == 201, resp.text
         user_id = resp.json()["id"]
         time.sleep(2)

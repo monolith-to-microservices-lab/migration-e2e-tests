@@ -23,6 +23,7 @@ markers = [
     "smoke: critical CDC path (users, sales, linked user+sale) - runs on every PR",
     "slow: takes more than a few seconds",
     "failure: chaos/failure-injection scenario - stops/starts real lab containers",
+    "gateway: client traffic through the API Gateway (Kong) incl. route switch/rollback",
 ]
 
 [tool.ruff]

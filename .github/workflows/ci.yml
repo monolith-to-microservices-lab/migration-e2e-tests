@@ -2,10 +2,12 @@
 #
 #   Lint, Type Check  the suite's own code (ruff, mypy, shellcheck)
 #   E2E Smoke         the REAL lab on the runner, no mocks:
-#                     monolith + legacy Postgres (WAL) -> Debezium -> Kafka ->
-#                     user/sales CDC consumers -> destination Postgres,
-#                     checked through the real HTTP APIs and databases.
-#                     Selection: -m smoke (users, sales, linked user+sale).
+#                     client -> API Gateway (Kong) -> monolith + legacy
+#                     Postgres (WAL) -> Debezium -> Kafka -> user/sales CDC
+#                     consumers -> destination Postgres, checked through the
+#                     real HTTP APIs and databases.
+#                     Selection: -m smoke (users, sales, linked user+sale,
+#                     gateway default routing, read switch + rollback).
 #
 # The full suite (observability + chaos) is e2e-full.yml (manual; nightly later).
 # Lab repositories are checked out from their main branch.
@@ -90,10 +92,15 @@ jobs:
           repository: monolith-to-microservices-lab/sales-service
           ref: main
           path: sales-service
+      - uses: actions/checkout@v7
+        with:
+          repository: monolith-to-microservices-lab/api-gateway
+          ref: main
+          path: api-gateway
 
       - name: Tooling used by the lab scripts
         run: |
-          command -v jq envsubst curl python3
+          command -v jq envsubst curl python3 pwsh
           docker compose version
 
       - name: Bring the lab up

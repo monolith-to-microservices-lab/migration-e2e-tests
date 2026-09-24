@@ -5,12 +5,13 @@
 #
 #   LAB_ROOT/
 #     monolito-microservice/  cdc-infrastructure/  user-service/
-#     sales-service/          observability-infrastructure/  (optional)
+#     sales-service/          api-gateway/  observability-infrastructure/ (optional)
 #
-#   1. shared network          4. enable-cdc.sh (role, publication, slot)
-#   2. monolith: postgres +    5. register-connector.sh + wait RUNNING
-#      backend (Alembic)       6. user-service + sales-service (API + CDC)
-#   3. Kafka + Kafka Connect   7. observability stack (WITH_OBSERVABILITY)
+#   1. shared network          5. register-connector.sh + wait RUNNING
+#   2. monolith: postgres +    6. user-service + sales-service (API + CDC)
+#      backend (Alembic)       7. api-gateway (Kong, default: all -> monolith)
+#   3. Kafka + Kafka Connect      + wait until Kong sees every backend healthy
+#   4. enable-cdc.sh           8. observability stack (WITH_OBSERVABILITY)
 #
 # Meant for CI runners and fresh machines. It uses the real compose files,
 # project names and container names the E2E suite expects. Do NOT run it on
@@ -60,6 +61,19 @@ step "user-service (API + CDC consumer)"
 
 step "sales-service (API + CDC consumer)"
 (cd "${LAB_ROOT}/sales-service" && docker compose up -d --build --wait)
+
+step "api-gateway (Kong - the clients' entry point, default routing = monolith)"
+(cd "${LAB_ROOT}/api-gateway" && docker compose up -d --build --wait)
+for upstream in monolith user-service sales-service; do
+  health=""
+  for _ in $(seq 1 60); do
+    health="$(curl -s "http://127.0.0.1:8089/upstreams/${upstream}.upstream/health" | jq -r '.data[0].health' 2>/dev/null)"
+    [[ "${health}" == "HEALTHY" ]] && break
+    sleep 2
+  done
+  echo "kong -> ${upstream}: ${health}"
+  [[ "${health}" == "HEALTHY" ]]
+done
 
 if [[ "${WITH_OBSERVABILITY}" == "true" ]]; then
   step "observability stack"
